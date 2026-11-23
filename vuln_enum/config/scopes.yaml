@@ -1,0 +1,218 @@
+# vuln_enum scopes configuration
+# Define authorized scan targets, profiles, and limits
+# ONLY scan targets you have explicit written authorization for
+
+version: 1
+
+# Global settings applied to all scopes unless overridden
+global:
+  # Rate limiting (requests per second per target)
+  default_rate_limit: 30
+  # Max concurrent hosts scanned simultaneously
+  max_concurrent_hosts: 10
+  # Default timeout for HTTP requests (seconds)
+  http_timeout: 15
+  # Default timeout for TCP connections (seconds)
+  tcp_timeout: 10
+  # Minimum severity to report (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+  min_severity: "INFO"
+  # Output directory base
+  output_base_dir: "./results"
+  # Enable resume/checkpoint functionality
+  enable_resume: true
+  # Verify SSL certificates (set false for self-signed in lab)
+  verify_ssl: true
+  # User agent for HTTP requests
+  user_agent: "vuln_enum/1.0.0 (+https://github.com/vuln-enum)"
+
+# Scanner-specific defaults
+scanners:
+  nuclei:
+    enabled: true
+    # Path to nuclei binary (auto-detected if in PATH)
+    binary_path: ""
+    # Template directory (auto-detected if not set)
+    template_dir: ""
+    # Tags to include (see nuclei -tl)
+    default_tags: ["cve", "vuln", "misconfig", "exposure", "takeover", "network", "ssl", "dns", "config"]
+    # Tags to exclude
+    exclude_tags: ["dos", "fuzz", "brute", "token-spray"]
+    # Severity filter
+    severity: ["critical", "high", "medium", "low", "info"]
+    # Rate limit (requests/second)
+    rate_limit: 150
+    # Bulk size (hosts per template)
+    bulk_size: 25
+    # Concurrency (templates in parallel)
+    concurrency: 25
+    # Headless mode for browser-based templates
+    headless: false
+    # Additional args passed to nuclei
+    extra_args: []
+
+  nmap:
+    enabled: true
+    binary_path: ""
+    # NSE script categories for vuln scanning
+    script_categories: ["vuln", "auth", "ssl", "default"]
+    # Exclude specific scripts (too noisy/dangerous)
+    exclude_scripts: ["http-brute", "ssh-brute", "snmp-brute", "smb-brute", "oracle-brute", "mysql-brute", "pgsql-brute"]
+    # Timing template (0-5, higher = faster but less reliable)
+    timing_template: 3
+    # Max retries
+    max_retries: 2
+    # Host timeout (minutes)
+    host_timeout: 30
+    # Port specification (empty = default top 1000)
+    ports: ""
+    # Additional args
+    extra_args: ["-sV", "-sC"]
+
+  trivy:
+    enabled: true
+    binary_path: ""
+    # Scan types: vuln, config, secret, rbac
+    scan_types: ["vuln", "config"]
+    # Severity filter
+    severity: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    # Output format
+    format: "json"
+    # Skip DB update
+    skip_db_update: false
+    # Timeout (seconds)
+    timeout: 300
+
+  grype:
+    enabled: false
+    binary_path: ""
+    severity: ["Critical", "High", "Medium", "Low"]
+    format: "json"
+
+# Scope definitions
+# Each scope represents an authorized engagement
+scopes:
+  - name: "example-external"
+    # Reference to authorization document/contract
+    auth_ref: "CONTRACT-2024-001"
+    # Description for reports
+    description: "External-facing assets for Example Corp"
+    # Target specifications (CIDR, hostname, URL, IP range)
+    targets:
+      - "example.com"
+      - "api.example.com"
+      - "192.0.2.0/24"
+    # Exclusions (CIDR, hostname, exact IP)
+    exclusions:
+      - "192.0.2.10/32"  # Critical infrastructure
+      - "legacy.example.com"
+    # Profiles to run (defined below)
+    profiles: ["web-full", "network-safe", "config-checks"]
+    # Override global rate limit for this scope
+    rate_limit: 30
+    max_concurrent_hosts: 5
+    # Custom scanner settings for this scope
+    scanners:
+      nuclei:
+        rate_limit: 100
+      nmap:
+        timing_template: 3
+
+  - name: "example-internal"
+    auth_ref: "CONTRACT-2024-001-INTERNAL"
+    description: "Internal network assessment"
+    targets:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+    exclusions:
+      - "10.0.0.0/16"  # Management network
+      - "10.10.0.0/16" # SCADA/ICS
+    profiles: ["internal-full", "ad-enum", "config-checks"]
+    rate_limit: 50
+    max_concurrent_hosts: 10
+
+  - name: "container-registry"
+    auth_ref: "CONTRACT-2024-001-CONTAINER"
+    description: "Container image vulnerability scanning"
+    targets:
+      - "registry.example.com/project/*"
+      - "docker.io/library/*"
+    profiles: ["container-cve", "container-config"]
+    scanners:
+      trivy:
+        scan_types: ["vuln", "config", "secret"]
+      grype:
+        enabled: true
+
+# Scan profiles - reusable combinations of scanner settings
+profiles:
+  web-full:
+    description: "Comprehensive web application scanning"
+    scanners: ["nuclei", "nmap"]
+    nuclei:
+      tags: ["cve", "vuln", "misconfig", "exposure", "takeover", "tech", "fuzz"]
+      exclude_tags: ["dos", "brute", "token-spray"]
+      severity: ["critical", "high", "medium", "low", "info"]
+    nmap:
+      script_categories: ["vuln", "auth", "http-*", "ssl-*"]
+      ports: "80,443,8080,8443,8000-9000"
+
+  web-quick:
+    description: "Quick web scan (high/critical only)"
+    scanners: ["nuclei"]
+    nuclei:
+      tags: ["cve", "vuln"]
+      severity: ["critical", "high"]
+      rate_limit: 200
+
+  network-safe:
+    description: "Network service enumeration (non-intrusive)"
+    scanners: ["nuclei", "nmap"]
+    nuclei:
+      tags: ["network", "ssl", "dns", "config"]
+      exclude_tags: ["dos", "fuzz", "brute"]
+    nmap:
+      script_categories: ["default", "ssl-*", "dns-*", "smb-vuln-*"]
+      exclude_scripts: ["*brute*", "*dos*"]
+      ports: "21,22,23,25,53,80,110,139,143,443,445,465,587,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,27017"
+
+  internal-full:
+    description: "Comprehensive internal network scan"
+    scanners: ["nuclei", "nmap"]
+    nuclei:
+      tags: ["cve", "vuln", "misconfig", "network", "config", "default-logins"]
+    nmap:
+      script_categories: ["vuln", "auth", "default", "discovery", "ssl-*"]
+      ports: "1-65535"
+      timing_template: 4
+
+  ad-enum:
+    description: "Active Directory focused enumeration"
+    scanners: ["nuclei", "nmap"]
+    nuclei:
+      tags: ["ad", "ldap", "kerberos", "smb", "dns", "default-logins"]
+    nmap:
+      script_categories: ["ldap-*", "kerberos-*", "smb-*", "dns-*"]
+      ports: "53,88,135,139,389,445,464,636,3268,3269,5985,5986,9389"
+
+  config-checks:
+    description: "Configuration and hardening checks"
+    scanners: ["nuclei"]
+    nuclei:
+      tags: ["config", "misconfig", "cloud", "k8s", "docker", "aws", "azure", "gcp"]
+      severity: ["critical", "high", "medium"]
+
+  container-cve:
+    description: "Container vulnerability scanning (CVEs)"
+    scanners: ["trivy", "grype"]
+    trivy:
+      scan_types: ["vuln"]
+      severity: ["CRITICAL", "HIGH", "MEDIUM"]
+    grype:
+      severity: ["Critical", "High", "Medium"]
+
+  container-config:
+    description: "Container configuration/hardening checks"
+    scanners: ["trivy"]
+    trivy:
+      scan_types: ["config", "secret", "rbac"]
+      severity: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
